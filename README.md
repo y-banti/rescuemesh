@@ -34,7 +34,7 @@ Banti Yadav & Mumtaz Sheikh
 
 **OpenEnv-compliant training environment for emergency mesh network restoration.**
 
-[![HF Spaces](https://img.shields.io/badge/🤗-HuggingFace_Space-blue)](https://huggingface.co/spaces/YOUR_USERNAME/rescuemesh)
+[![HF Spaces](https://img.shields.io/badge/🤗-HuggingFace_Space-blue)](https://huggingface.co/spaces/ybanti/rescuemesh)
 
 ---
 
@@ -206,7 +206,7 @@ Interactive API docs at: `http://localhost:7860/docs`
 ### Local
 
 ```bash
-git clone https://huggingface.co/spaces/YOUR_USERNAME/rescuemesh
+git clone https://huggingface.co/spaces/ybanti/rescuemesh
 cd rescuemesh
 pip install -r requirements.txt
 python app.py
@@ -263,7 +263,6 @@ rescuemesh/
 ├── baseline_agent.py   # Simple LLM baseline template
 ├── openenv.yaml        # OpenEnv spec config
 ├── requirements.txt
-├── Dockerfile
 └── README.md
 ```
 
