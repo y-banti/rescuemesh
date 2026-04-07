@@ -208,8 +208,11 @@ def reset(req: ResetRequest):
         _histories[req.session_id].append(obs)
         
         # Convert observation to dashboard format
-        state = _convert_to_dashboard_format(obs)
-        return {"state": state, "observation": obs, "session_id": req.session_id}
+        # Note: the converted state is kept in memory or handled by client 
+        # to preserve EXACT OpenEnv response dictionary format
+        _convert_to_dashboard_format(obs)
+        
+        return {"observation": obs}
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
 
@@ -230,15 +233,13 @@ def step(req: StepRequest):
         _histories[req.session_id].append(obs)
         
         # Convert observation to dashboard format
-        state = _convert_to_dashboard_format(obs)
+        _convert_to_dashboard_format(obs)
         
         return {
-            "state": state,
             "observation": obs,
             "reward": reward,
             "done": done,
-            "info": info,
-            "session_id": req.session_id,
+            "info": info
         }
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
