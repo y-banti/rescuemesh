@@ -93,10 +93,10 @@ class ResetRequest(BaseModel):
 
 class StepRequest(BaseModel):
     action_type: str = Field(..., description="place_relay | move_drone | boost_signal | reroute")
-    target_x: float = Field(default=50.0, ge=0.0, le=100.0)
-    target_y: float = Field(default=50.0, ge=0.0, le=100.0)
+    target_x: Optional[float] = Field(default=None, ge=0.0, le=100.0)
+    target_y: Optional[float] = Field(default=None, ge=0.0, le=100.0)
     node_id: Optional[str] = Field(default=None)
-    boost_amount: float = Field(default=0.2, ge=0.0, le=1.0)
+    boost_amount: Optional[float] = Field(default=None, ge=0.0, le=1.0)
     session_id: str = Field(default=DEFAULT_SESSION)
 
 
@@ -115,11 +115,7 @@ class BaselineRequest(BaseModel):
 
 @app.get("/")
 def root():
-    return {
-        "name": "RescueMesh AI Environment",
-        "version": "1.0.0",
-        "endpoints": ["/tasks", "/reset", "/step", "/state", "/grader", "/baseline"],
-    }
+    return {"message": "API running"}
 
 
 @app.get("/tasks")
@@ -206,12 +202,6 @@ def reset(req: ResetRequest):
         _histories[req.session_id] = []
         obs = env.reset()
         _histories[req.session_id].append(obs)
-        
-        # Convert observation to dashboard format
-        # Note: the converted state is kept in memory or handled by client 
-        # to preserve EXACT OpenEnv response dictionary format
-        _convert_to_dashboard_format(obs)
-        
         return {"observation": obs}
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
@@ -221,20 +211,9 @@ def reset(req: ResetRequest):
 def step(req: StepRequest):
     """Execute one action. Returns (observation, reward, done, info)."""
     env = _get_env(req.session_id)
-    action = {
-        "action_type": req.action_type,
-        "target_x": req.target_x,
-        "target_y": req.target_y,
-        "node_id": req.node_id,
-        "boost_amount": req.boost_amount,
-    }
     try:
-        obs, reward, done, info = env.step(action)
+        obs, reward, done, info = env.step(req.dict())
         _histories[req.session_id].append(obs)
-        
-        # Convert observation to dashboard format
-        _convert_to_dashboard_format(obs)
-        
         return {
             "observation": obs,
             "reward": reward,
