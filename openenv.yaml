@@ -1,0 +1,167 @@
+openenv_version: "0.1.0"
+name: RescueMeshEnv
+version: "1.0.0"
+description: >
+  Emergency mesh network restoration environment. An AI agent deploys relay
+  nodes, moves drones, and boosts signals to restore communication in disaster
+  and coal mine scenarios. Models real-world search-and-rescue communication
+  infrastructure challenges.
+
+author: "RescueMesh Team"
+license: MIT
+
+inference:
+  entry: inference.py
+
+environment:
+  type: sequential
+  render_modes: []
+  coordinate_system: grid_2d
+  grid_size: [100, 100]
+
+observation_space:
+  type: dict
+  properties:
+    nodes:
+      type: array
+      items:
+        type: object
+        properties:
+          id:       { type: string }
+          x:        { type: number, minimum: 0, maximum: 100 }
+          y:        { type: number, minimum: 0, maximum: 100 }
+          signal:   { type: number, minimum: 0.0, maximum: 1.0 }
+          battery:  { type: number, minimum: 0.0, maximum: 1.0 }
+          is_relay: { type: boolean }
+          is_active:{ type: boolean }
+    obstacles:
+      type: array
+      items:
+        type: object
+        properties:
+          x:           { type: number }
+          y:           { type: number }
+          width:       { type: number }
+          height:      { type: number }
+          attenuation: { type: number, minimum: 0.0, maximum: 1.0 }
+    connected_pairs:
+      type: array
+      items: { type: array, items: { type: string } }
+    coverage_ratio:  { type: number, minimum: 0.0, maximum: 1.0 }
+    relays_placed:   { type: integer, minimum: 0 }
+    step_count:      { type: integer, minimum: 0 }
+    task_id:         { type: string }
+    max_steps:       { type: integer }
+
+action_space:
+  type: dict
+  properties:
+    action_type:
+      type: string
+      enum: [place_relay, move_drone, boost_signal, reroute]
+    target_x:
+      type: number
+      minimum: 0.0
+      maximum: 100.0
+      default: 50.0
+    target_y:
+      type: number
+      minimum: 0.0
+      maximum: 100.0
+      default: 50.0
+    node_id:
+      type: string
+      nullable: true
+      default: null
+    boost_amount:
+      type: number
+      minimum: 0.0
+      maximum: 1.0
+      default: 0.2
+
+reward:
+  type: shaped
+  range: [-0.1, 1.5]
+  components:
+    - name: placement_base
+      value: "+0.1 per relay placed"
+    - name: coverage_improvement
+      value: "+0.3 × coverage_delta when positive"
+    - name: boost_reward
+      value: "+0.2 × boost_amount for effective boost"
+    - name: reroute_reward
+      value: "+0.15 for reviving a dead node"
+    - name: movement_reward
+      value: "+0.05 for valid drone move"
+    - name: success_bonus
+      value: "+1.0 when target_coverage reached"
+    - name: degradation_penalty
+      value: "-0.1 if coverage drops more than 5%"
+    - name: invalid_action_penalty
+      value: "-0.05 for out-of-budget or invalid actions"
+
+tasks:
+  - id: easy_open_field
+    difficulty: easy
+    description: "Open field, no obstacles, 4 survivor nodes, max 20 steps"
+    max_steps: 20
+    max_relays: 5
+    target_coverage: 1.0
+    grader:
+      weights:
+        coverage: 0.50
+        efficiency: 0.25
+        relay_economy: 0.15
+        battery_preservation: 0.10
+
+  - id: medium_obstacle
+    difficulty: medium
+    description: "Urban disaster zone with 3 collapsed buildings, 5 nodes, max 30 steps"
+    max_steps: 30
+    max_relays: 6
+    target_coverage: 0.85
+    grader:
+      weights:
+        coverage: 0.50
+        efficiency: 0.25
+        relay_economy: 0.15
+        battery_preservation: 0.10
+
+  - id: hard_coal_mine
+    difficulty: hard
+    description: "Underground coal mine, 4 obstacles, severe attenuation, max 40 steps"
+    max_steps: 40
+    max_relays: 5
+    target_coverage: 0.75
+    grader:
+      weights:
+        coverage: 0.50
+        efficiency: 0.25
+        relay_economy: 0.15
+        battery_preservation: 0.10
+
+endpoints:
+  tasks:
+    path: /tasks
+    method: GET
+    description: List all tasks and action/observation schema
+  reset:
+    path: /reset
+    method: POST
+    description: Start or restart an episode
+  step:
+    path: /step
+    method: POST
+    description: Execute one action, returns (obs, reward, done, info)
+  state:
+    path: /state
+    method: GET
+    description: Return full internal state
+  grader:
+    path: /grader
+    method: POST
+    description: Score a completed episode (0.0–1.0)
+  baseline:
+    path: /baseline
+    method: POST
+    description: Run heuristic baseline and return scores for all 3 tasks
