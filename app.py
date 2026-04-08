@@ -1,13 +1,12 @@
 """
-RescueMesh AI Environment — FastAPI Server
-Required endpoints: /tasks, /grader, /baseline, /step, /reset, /state
+RescueMesh AI Environment — FastAPI Server (app.py)
+OpenEnv-compliant endpoints: /tasks, /reset, /step, /state, /grader, /baseline
 """
 
 from fastapi import FastAPI, HTTPException, Body
-from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
-from typing import Any, Optional
+from typing import Optional
 import uvicorn
 import os
 
@@ -21,9 +20,9 @@ app = FastAPI(
     title="RescueMesh AI Environment",
     description="OpenEnv-compliant environment for emergency communication restoration.",
     version="1.0.0",
+    redirect_slashes=False,  # Prevents 307 redirect issues with validators
 )
 
-# Allow dashboard (Vite dev server) and any local origin to call the API
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -32,7 +31,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Global env registry: session_id → env instance
+# Global session registry
 _envs: dict[str, RescueMeshEnv] = {}
 _histories: dict[str, list[dict]] = {}
 _grader = RescueMeshGrader()
@@ -42,53 +41,22 @@ DEFAULT_SESSION = "default"
 
 def _get_env(session_id: str) -> RescueMeshEnv:
     if session_id not in _envs:
-        raise HTTPException(status_code=404, detail=f"Session '{session_id}' not found. Call /reset first.")
+        raise HTTPException(
+            status_code=404,
+            detail=f"Session '{session_id}' not found. Call /reset first."
+        )
     return _envs[session_id]
 
 
-def _convert_to_dashboard_format(obs: dict) -> dict:
-    """
-    Convert observation format from environment to dashboard format.
-    Dashboard expects field names like 'active' instead of 'is_active'.
-    Dashboard expects 'connectivity' instead of 'coverage_ratio'.
-    """
-    if not obs:
-        return obs
-    
-    # Convert nodes: is_active -> active, is_relay -> relay
-    converted_nodes = []
-    for node in obs.get("nodes", []):
-        converted_nodes.append({
-            "id": node.get("id"),
-            "x": node.get("x"),
-            "y": node.get("y"),
-            "signal": node.get("signal"),
-            "battery": node.get("battery"),
-            "active": node.get("is_active", True),  # Convert is_active to active
-            "relay": node.get("is_relay", False),  # Convert is_relay to relay
-        })
-    
-    return {
-        "nodes": converted_nodes,
-        "obstacles": obs.get("obstacles", []),
-        "connected_pairs": obs.get("connected_pairs", []),
-        "coverage_ratio": obs.get("coverage_ratio", 0.0),
-        "connectivity": obs.get("coverage_ratio", 0.0),  # Alias for dashboard
-        "active_relays": obs.get("active_relays", 0),
-        "step_count": obs.get("step_count", 0),
-        "task_id": obs.get("task_id", ""),
-        "max_steps": obs.get("max_steps", 0),
-    }
-
-
 # ─────────────────────────────────────────────
-# Pydantic models
+# Pydantic models — all fields optional with defaults
+# so validator can POST empty body {} without 422 errors
 # ─────────────────────────────────────────────
 
 class ResetRequest(BaseModel):
-    task_id: str = Field(default="easy_open_field", description="Task ID to start")
-    seed: int = Field(default=42, description="Random seed for reproducibility")
-    session_id: str = Field(default=DEFAULT_SESSION)
+    task_id: Optional[str] = Field(default="easy_open_field")
+    seed: Optional[int] = Field(default=42)
+    session_id: Optional[str] = Field(default=DEFAULT_SESSION)
 
 
 class StepRequest(BaseModel):
@@ -97,16 +65,16 @@ class StepRequest(BaseModel):
     target_y: Optional[float] = Field(default=None, ge=0.0, le=100.0)
     node_id: Optional[str] = Field(default=None)
     boost_amount: Optional[float] = Field(default=None, ge=0.0, le=1.0)
-    session_id: str = Field(default=DEFAULT_SESSION)
+    session_id: Optional[str] = Field(default=DEFAULT_SESSION)
 
 
 class GraderRequest(BaseModel):
-    session_id: str = Field(default=DEFAULT_SESSION)
+    session_id: Optional[str] = Field(default=DEFAULT_SESSION)
 
 
 class BaselineRequest(BaseModel):
-    task_id: str = Field(default="easy_open_field")
-    seed: int = Field(default=42)
+    task_id: Optional[str] = Field(default="easy_open_field")
+    seed: Optional[int] = Field(default=42)
 
 
 # ─────────────────────────────────────────────
@@ -115,12 +83,12 @@ class BaselineRequest(BaseModel):
 
 @app.get("/")
 def root():
-    return {"message": "API running"}
+    return {"message": "RescueMesh API is running", "status": "ok"}
 
 
 @app.get("/tasks")
 def list_tasks():
-    """Returns all available tasks and the full action schema."""
+    """Returns all available tasks and the full action/observation schema."""
     tasks = []
     for tid, cfg in TASK_CONFIGS.items():
         tasks.append({
@@ -172,7 +140,7 @@ def list_tasks():
         "obstacles": "list of {x, y, width, height, attenuation}",
         "connected_pairs": "list of [node_id_a, node_id_b]",
         "coverage_ratio": "float 0.0–1.0",
-        "active_relays": "int",
+        "relays_placed": "int",   # NOTE: was active_relays — fixed to match environment.py
         "step_count": "int",
         "task_id": "str",
         "max_steps": "int",
@@ -194,8 +162,14 @@ def list_tasks():
 
 
 @app.post("/reset")
-def reset(req: ResetRequest):
-    """Reset (or start) an episode. Returns initial observation."""
+def reset(req: ResetRequest = Body(default=None)):
+    """
+    Reset (or start) an episode. Returns initial observation.
+    Accepts empty body — all fields have safe defaults.
+    """
+    if req is None:
+        req = ResetRequest()
+
     try:
         env = RescueMeshEnv(task_id=req.task_id, seed=req.seed)
         _envs[req.session_id] = env
@@ -218,7 +192,7 @@ def step(req: StepRequest):
             "observation": obs,
             "reward": reward,
             "done": done,
-            "info": info
+            "info": info,
         }
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
@@ -232,23 +206,31 @@ def state(session_id: str = DEFAULT_SESSION):
 
 
 @app.post("/grader")
-def grade(req: GraderRequest):
+def grade(req: GraderRequest = Body(default=None)):
     """
     Score the completed episode. Returns score 0.0–1.0 with breakdown.
     Must call /reset and run some /step calls first.
     """
+    if req is None:
+        req = GraderRequest()
+
     if req.session_id not in _histories or not _histories[req.session_id]:
-        raise HTTPException(status_code=400, detail="No episode history found. Run /reset and /step first.")
-    result = _grader.grade(_histories[req.session_id])
-    return result
+        raise HTTPException(
+            status_code=400,
+            detail="No episode history found. Run /reset and /step first."
+        )
+    return _grader.grade(_histories[req.session_id])
 
 
 @app.post("/baseline")
-def run_baseline(req: BaselineRequest):
+def run_baseline(req: BaselineRequest = Body(default=None)):
     """
-    Run a simple heuristic baseline agent (no LLM required).
-    Returns scores across all 3 tasks for reproducibility.
+    Run heuristic baseline agent across all 3 tasks.
+    Returns scores for reproducibility benchmarking.
     """
+    if req is None:
+        req = BaselineRequest()
+
     results = {}
     tasks = [TaskID.EASY, TaskID.MEDIUM, TaskID.HARD]
 
@@ -279,7 +261,9 @@ def run_baseline(req: BaselineRequest):
         "agent": "heuristic_baseline",
         "seed": req.seed,
         "results": results,
-        "average_score": round(sum(r["score"] for r in results.values()) / len(results), 4),
+        "average_score": round(
+            sum(r["score"] for r in results.values()) / len(results), 4
+        ),
     }
 
 
@@ -290,52 +274,59 @@ def run_baseline(req: BaselineRequest):
 def _heuristic_action(obs: dict, state: dict, step_num: int) -> dict:
     """
     Simple rule-based agent:
-    - First few steps: place relays at midpoints between base and survivors
-    - Then: boost nodes with low signal
-    - Finally: reroute dead nodes
+    - Phase 1: place relays at midpoints between base and survivors
+    - Phase 2: boost nodes with low signal
+    - Phase 3: reroute dead nodes
     """
     nodes = obs.get("nodes", [])
     max_relays = state.get("max_relays", 5)
-    relays_placed = state.get("relays_placed", 0)
+    relays_placed = state.get("relays_placed", 0)  # Fixed: was active_relays
 
-    # Find base and survivor positions
-    base = next((n for n in nodes if n["id"].startswith("base") or n["id"].startswith("surface")), None)
-    survivors = [n for n in nodes if not n["id"].startswith("base") and
-                 not n["id"].startswith("surface") and
-                 not n["id"].startswith("relay")]
+    base = next(
+        (n for n in nodes if n["id"].startswith("base") or n["id"].startswith("surface")),
+        None
+    )
+    survivors = [
+        n for n in nodes
+        if not n["id"].startswith("base")
+        and not n["id"].startswith("surface")
+        and not n["id"].startswith("relay")
+    ]
 
-    # Phase 1: Place relays at midpoints (use roughly half budget)
+    # Phase 1: place relays at midpoints
     relay_budget = max_relays // 2 + 1
     if relays_placed < relay_budget and base and survivors:
-        target = survivors[step_num % len(survivors)] if survivors else None
-        if target:
-            mx = (base["x"] + target["x"]) / 2 + (step_num % 3 - 1) * 5
-            my = (base["y"] + target["y"]) / 2 + (step_num % 2 - 0.5) * 5
-            return {
-                "action_type": "place_relay",
-                "target_x": round(min(95, max(5, mx)), 1),
-                "target_y": round(min(95, max(5, my)), 1),
-            }
+        target = survivors[step_num % len(survivors)]
+        mx = (base["x"] + target["x"]) / 2 + (step_num % 3 - 1) * 5
+        my = (base["y"] + target["y"]) / 2 + (step_num % 2 - 0.5) * 5
+        return {
+            "action_type": "place_relay",
+            "target_x": round(min(95.0, max(5.0, mx)), 1),
+            "target_y": round(min(95.0, max(5.0, my)), 1),
+        }
 
-    # Phase 2: Boost lowest-signal active survivor
-    active_survivors = [n for n in survivors if n.get("is_active") and n["signal"] < 0.6]
-    if active_survivors:
-        target = min(active_survivors, key=lambda n: n["signal"])
+    # Phase 2: boost lowest-signal active survivor
+    active_low = [
+        n for n in survivors
+        if n.get("is_active") and n["signal"] < 0.6
+    ]
+    if active_low:
+        target = min(active_low, key=lambda n: n["signal"])
         return {
             "action_type": "boost_signal",
             "node_id": target["id"],
             "boost_amount": 0.3,
         }
 
-    # Phase 3: Reroute dead nodes
-    dead = [n for n in nodes if not n.get("is_active") and not n["id"].startswith("relay")]
+    # Phase 3: reroute dead nodes
+    dead = [
+        n for n in nodes
+        if not n.get("is_active") and not n["id"].startswith("relay")
+    ]
     if dead:
-        return {
-            "action_type": "reroute",
-            "node_id": dead[0]["id"],
-        }
+        return {"action_type": "reroute", "node_id": dead[0]["id"]}
 
-    # Fallback: move a relay closer to centroid of survivors
+    # Phase 4: move drone toward centroid of survivors
     if survivors and relays_placed > 0:
         cx = sum(n["x"] for n in survivors) / len(survivors)
         cy = sum(n["y"] for n in survivors) / len(survivors)
@@ -345,7 +336,7 @@ def _heuristic_action(obs: dict, state: dict, step_num: int) -> dict:
             "target_y": round(cy, 1),
         }
 
-    # Default no-op (still a valid action)
+    # Safe fallback no-op
     return {"action_type": "boost_signal", "node_id": None, "boost_amount": 0.0}
 
 
@@ -355,4 +346,4 @@ def _heuristic_action(obs: dict, state: dict, step_num: int) -> dict:
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 7860))
-    uvicorn.run("main:app", host="0.0.0.0", port=port, reload=False)
+    uvicorn.run("app:app", host="0.0.0.0", port=port, reload=False)
